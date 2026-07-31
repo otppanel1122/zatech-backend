@@ -1,7 +1,7 @@
 {
   "name": "zatech-sms-proxy",
   "version": "1.0.0",
-  "description": "Optimized proxy for zatechsolutions.online SMS API",
+  "description": "Fast proxy for zatechsolutions.online SMS API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

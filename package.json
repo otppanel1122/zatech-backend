@@ -1,7 +1,7 @@
 {
   "name": "zatech-sms-proxy",
   "version": "1.0.0",
-  "description": "Proxy for zatechsolutions.online SMS API",
+  "description": "Proxy for zatechsolutions.online SMS API with authentication",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "axios": "^1.6.2"
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12"
   }
 }

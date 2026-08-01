@@ -164,7 +164,7 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
 
         console.log(`[STREAM] Processing ${numbers.length} numbers`);
 
-        const concurrency = 30; // balanced concurrency to avoid upstream throttling
+        const concurrency = 100; // balanced concurrency to avoid upstream throttling
         const batches = [];
         for (let i = 0; i < numbers.length; i += concurrency) {
             batches.push(numbers.slice(i, i + concurrency));

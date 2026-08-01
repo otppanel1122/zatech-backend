@@ -166,7 +166,7 @@ app.get('/api/sms/bulk', async (req, res) => {
         console.log(`[BULK] Processing ${numberList.length} numbers`);
         
         // Process in parallel with concurrency limit
-        const concurrency = 130;
+        const concurrency = 600;
         const results = [];
         const batches = [];
         

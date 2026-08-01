@@ -7,10 +7,10 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// ─── YOUR SESSION COOKIES (exactly as provided) ─────────────────────────────
+// ─── YOUR SESSION COOKIES ───────────────────────────────────────────────────
 const COOKIE_STRING = '__Host-authjs.csrf-token=3d7ffcfbe406686694d1e522c7dca618cd2552e5bc0617c8842024bee0bad7a0%7C7f5271753378909234f3f855a0b4ff2a8629e1c0d5ad1e2617d6a83b85abd7a0; __Secure-authjs.callback-url=https%3A%2F%2Fzatechsolutions.online%2F; __cf_bm=ledUAtSBEVs0Y2w5qRJDhZTuL3Rdrb863dhpNyzlOMY-1785528531.5288565-1.0.1.1-ngmaa.Zm3wncjszPOfEaaSvJmjqnpROoEKK4syJKxDG6k.rHXHLyjBOtQI4Ehb9HawajCIfYZltwOEJQma7aer9i7W7fy0yY2bcQ1LCJVVCo570uR3ORom90V1ktoJc7; __Secure-authjs.session-token=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwia2lkIjoiTmswT2tCZVByUGY2V2pVeDhyQnhCaHM3SnBPencyYzhSM3l3WUpWWXk4RzcxWkRTRy12MnMtT0FwdkdicVo0c1pCRjhackdIT3B6aGwta1MtM3hweEEifQ..bSN7dZTLou7tLhSpnnGq5g.oPMMdv416CCzJgELYbIkFyaOr-Sk4or1unbWIpmqtAcVFkNY5w9-VJ4UI_hykbmVrhBwlB1ggeomL85fQwvLeBTM-qhJxgXlTh0DxZ2To34nCTotHAgc6_m2QTnytBF07BOKVEelliLVIucWB7ZSU4s4wVchGINJ1o7v_n3eGrw1O4hsKf-VVoA9QgR3JcedBqMVmtM9TUFHE1uHD1RIxxPOG-F0epB2gwjmB44in51kc1LAjH7fHZwpfUtupV0UPwsXVi2vFll8CnohoPb6W6IGC6WwdOp3kbtungi5ch7j_PoxmC-bEZ0rGcrxjg3S.ZKDkIUQSO2XZc1Ws7EWuOcclx8Fc_bp1wSKbCFhPEkA';
 
-// ─── ALL REQUIRED HEADERS (exactly as used in your working frontend) ──────
+// ─── ALL REQUIRED HEADERS ──────────────────────────────────────────────────
 const DEFAULT_HEADERS = {
     'Host': 'zatechsolutions.online',
     'rsc': '1',
@@ -21,11 +21,11 @@ const DEFAULT_HEADERS = {
     'Accept-Language': 'en-US,en;q=0.9'
 };
 
-// ─── In-memory cache (5 minute TTL) ────────────────────────────────────────
+// ─── Cache ──────────────────────────────────────────────────────────────────
 const cache = new Map();
 const CACHE_TTL = 300000;
 
-// ─── FAST PARSER – Direct regex extraction ──────────────────────────────────
+// ─── Parser ─────────────────────────────────────────────────────────────────
 function parseSMSData(html) {
     const smsData = [];
     const jsonMatches = html.match(/\{"_id":"[^"]+","from":"[^"]+","to":"[^"]+","message":"[^"]+","createdAt":"[^"]+"\}/g);
@@ -63,39 +63,49 @@ function parseSMSData(html) {
     return { data: smsData, totalResults, totalPages };
 }
 
-// ─── Helper: fetch a single number's data (with caching) ──────────────────
-async function fetchNumberData(num, startDate = '', endDate = '') {
+// ─── Fetch helper with retry ──────────────────────────────────────────────
+async function fetchNumberData(num, startDate = '', endDate = '', retries = 1) {
     const cacheKey = `${num}_1_${startDate || ''}_${endDate || ''}`;
     if (cache.has(cacheKey) && Date.now() - cache.get(cacheKey).timestamp < CACHE_TTL) {
         return { data: cache.get(cacheKey).data.data.data, error: false };
     }
-    try {
-        let url = `https://zatechsolutions.online/dashboard?query=${encodeURIComponent(num)}&page=1`;
-        if (startDate) url += `&startDate=${encodeURIComponent(startDate)}`;
-        if (endDate) url += `&endDate=${encodeURIComponent(endDate)}`;
-        url += `&_rsc=${Date.now().toString(36)}`;
 
-        const response = await axios.get(url, {
-            headers: DEFAULT_HEADERS,
-            timeout: 120000 // 2 minutes per request (upstream may be slow)
-        });
+    const attemptFetch = async () => {
+        try {
+            let url = `https://zatechsolutions.online/dashboard?query=${encodeURIComponent(num)}&page=1`;
+            if (startDate) url += `&startDate=${encodeURIComponent(startDate)}`;
+            if (endDate) url += `&endDate=${encodeURIComponent(endDate)}`;
+            url += `&_rsc=${Date.now().toString(36)}`;
 
-        // Check for login page
-        if (response.data && response.data.length < 5000 && 
-            (response.data.includes('Sign In') || response.data.includes('login'))) {
-            return { data: [], error: true, errorMsg: 'Session expired' };
+            const response = await axios.get(url, {
+                headers: DEFAULT_HEADERS,
+                timeout: 120000 // 2 minutes
+            });
+
+            if (response.data && response.data.length < 5000 && 
+                (response.data.includes('Sign In') || response.data.includes('login'))) {
+                return { data: [], error: true, errorMsg: 'Session expired' };
+            }
+
+            const parsed = parseSMSData(response.data);
+            const data = parsed.data;
+            cache.set(cacheKey, {
+                timestamp: Date.now(),
+                data: { data: { data } }
+            });
+            return { data, error: false };
+        } catch (e) {
+            return { data: [], error: true, errorMsg: e.message };
         }
+    };
 
-        const parsed = parseSMSData(response.data);
-        const data = parsed.data;
-        cache.set(cacheKey, {
-            timestamp: Date.now(),
-            data: { data: { data } }
-        });
-        return { data, error: false };
-    } catch (e) {
-        return { data: [], error: true };
+    let result = await attemptFetch();
+    if (result.error && retries > 0) {
+        // Retry once after a short delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        result = await attemptFetch();
     }
+    return result;
 }
 
 // ─── SINGLE QUERY ENDPOINT ──────────────────────────────────────────────────
@@ -149,7 +159,7 @@ app.get('/api/sms', async (req, res) => {
     }
 });
 
-// ─── STREAMING BULK ENDPOINT – real-time updates ──────────────────────────
+// ─── STREAMING BULK ENDPOINT – with retries and detailed logging ──────────
 app.post('/api/sms/bulk-stream', async (req, res) => {
     try {
         let { numbers, startDate, endDate } = req.body;
@@ -157,14 +167,13 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
             return res.status(400).json({ error: 'Provide an array of numbers' });
         }
 
-        // Set streaming headers
         res.setHeader('Content-Type', 'application/x-ndjson');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
 
-        console.log(`[STREAM] Processing ${numbers.length} numbers`);
+        console.log(`[BULK-STREAM] Starting: ${numbers.length} numbers`);
 
-        const concurrency = 100; // balanced concurrency to avoid upstream throttling
+        const concurrency = 20; // balanced
         const batches = [];
         for (let i = 0; i < numbers.length; i += concurrency) {
             batches.push(numbers.slice(i, i + concurrency));
@@ -172,15 +181,18 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
 
         let totalCount = 0;
         const senderMap = {};
-        const senderDestinations = {}; // sender -> { destination: count }
+        const senderDestinations = {};
         let processed = 0;
+        let succeeded = 0;
+        let failed = 0;
 
         for (const batch of batches) {
-            const batchPromises = batch.map(num => fetchNumberData(num, startDate, endDate));
+            const batchPromises = batch.map(num => fetchNumberData(num, startDate, endDate, 1));
             const batchResults = await Promise.all(batchPromises);
 
             for (const r of batchResults) {
                 if (!r.error && r.data.length > 0) {
+                    succeeded++;
                     totalCount += r.data.length;
                     for (const rec of r.data) {
                         const sender = rec.from || 'unknown';
@@ -189,6 +201,8 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
                         if (!senderDestinations[sender]) senderDestinations[sender] = {};
                         senderDestinations[sender][dest] = (senderDestinations[sender][dest] || 0) + 1;
                     }
+                } else {
+                    failed++;
                 }
             }
 
@@ -199,13 +213,23 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
                 .sort((a, b) => b[1] - a[1])
                 .map(([sender, count]) => ({ sender, count }));
 
-            // Send incremental update (no destinations to keep payload light)
-            const payload = JSON.stringify({ totalCount, breakdown, progress, done: false });
+            const payload = JSON.stringify({
+                totalCount,
+                breakdown,
+                progress,
+                done: false,
+                // optional: stats for debugging
+                processed,
+                succeeded,
+                failed
+            });
             res.write(payload + '\n');
             if (res.flush) res.flush();
+
+            console.log(`[BULK-STREAM] Progress: ${processed}/${numbers.length} (succeeded: ${succeeded}, failed: ${failed})`);
         }
 
-        // Final payload includes the full destination map
+        // Final payload
         const finalBreakdown = Object.entries(senderMap)
             .sort((a, b) => b[1] - a[1])
             .map(([sender, count]) => ({ sender, count }));
@@ -215,14 +239,15 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
             breakdown: finalBreakdown,
             progress: 100,
             done: true,
-            senderDestinations
+            senderDestinations,
+            stats: { processed, succeeded, failed }
         });
         res.write(finalPayload + '\n');
         res.end();
 
-        console.log(`[STREAM DONE] ${numbers.length} numbers, ${totalCount} records`);
+        console.log(`[BULK-STREAM] Completed: ${numbers.length} numbers, ${totalCount} records, succeeded: ${succeeded}, failed: ${failed}`);
     } catch (error) {
-        console.error('[STREAM ERROR]', error);
+        console.error('[BULK-STREAM ERROR]', error);
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         } else {
@@ -232,7 +257,7 @@ app.post('/api/sms/bulk-stream', async (req, res) => {
     }
 });
 
-// ─── HEALTH CHECK ────────────────────────────────────────────────────────────
+// ─── HEALTH ──────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString(), cacheSize: cache.size });
 });
@@ -255,4 +280,4 @@ const server = app.listen(PORT, () => {
     console.log(`📍 Health: http://localhost:${PORT}/health`);
     console.log(`⚡ Cache TTL: ${CACHE_TTL/1000} seconds`);
 });
-server.timeout = 0; // Disable Node.js default timeout
+server.timeout = 0;

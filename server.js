@@ -5,9 +5,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' })); // allow large payloads
+app.use(express.json({ limit: '50mb' }));
 
-// Your session cookies (same as before)
+// Your session cookies
 const COOKIE_STRING = '__Host-authjs.csrf-token=3d7ffcfbe406686694d1e522c7dca618cd2552e5bc0617c8842024bee0bad7a0%7C7f5271753378909234f3f855a0b4ff2a8629e1c0d5ad1e2617d6a83b85abd7a0; __Secure-authjs.callback-url=https%3A%2F%2Fzatechsolutions.online%2F; __cf_bm=ledUAtSBEVs0Y2w5qRJDhZTuL3Rdrb863dhpNyzlOMY-1785528531.5288565-1.0.1.1-ngmaa.Zm3wncjszPOfEaaSvJmjqnpROoEKK4syJKxDG6k.rHXHLyjBOtQI4Ehb9HawajCIfYZltwOEJQma7aer9i7W7fy0yY2bcQ1LCJVVCo570uR3ORom90V1ktoJc7; __Secure-authjs.session-token=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwia2lkIjoiTmswT2tCZVByUGY2V2pVeDhyQnhCaHM3SnBPencyYzhSM3l3WUpWWXk4RzcxWkRTRy12MnMtT0FwdkdicVo0c1pCRjhackdIT3B6aGwta1MtM3hweEEifQ..bSN7dZTLou7tLhSpnnGq5g.oPMMdv416CCzJgELYbIkFyaOr-Sk4or1unbWIpmqtAcVFkNY5w9-VJ4UI_hykbmVrhBwlB1ggeomL85fQwvLeBTM-qhJxgXlTh0DxZ2To34nCTotHAgc6_m2QTnytBF07BOKVEelliLVIucWB7ZSU4s4wVchGINJ1o7v_n3eGrw1O4hsKf-VVoA9QgR3JcedBqMVmtM9TUFHE1uHD1RIxxPOG-F0epB2gwjmB44in51kc1LAjH7fHZwpfUtupV0UPwsXVi2vFll8CnohoPb6W6IGC6WwdOp3kbtungi5ch7j_PoxmC-bEZ0rGcrxjg3S.ZKDkIUQSO2XZc1Ws7EWuOcclx8Fc_bp1wSKbCFhPEkA';
 
 // In-memory cache (5 minute TTL)
@@ -73,7 +73,7 @@ async function fetchNumberData(num, startDate = '', endDate = '') {
                 'Cookie': COOKIE_STRING,
                 'Accept-Encoding': 'gzip, deflate, br, zstd'
             },
-            timeout: 30000 // 30 seconds per request
+            timeout: 60000 // 60 seconds per request
         });
 
         const parsed = parseSMSData(response.data);
@@ -88,7 +88,7 @@ async function fetchNumberData(num, startDate = '', endDate = '') {
     }
 }
 
-// === SINGLE QUERY ENDPOINT (unchanged) ===
+// === SINGLE QUERY ENDPOINT ===
 app.get('/api/sms', async (req, res) => {
     const startTime = Date.now();
     try {
@@ -114,7 +114,7 @@ app.get('/api/sms', async (req, res) => {
                 'Cookie': COOKIE_STRING,
                 'Accept-Encoding': 'gzip, deflate, br, zstd'
             },
-            timeout: 30000
+            timeout: 60000
         });
 
         if (response.data && response.data.length < 5000 && 
@@ -147,78 +147,78 @@ app.get('/api/sms', async (req, res) => {
     }
 });
 
-// === BULK ENDPOINT – POST (fast, no artificial limit) ===
-app.post('/api/sms/bulk', async (req, res) => {
-    const startTime = Date.now();
+// === STREAMING BULK ENDPOINT – real-time updates ===
+app.post('/api/sms/bulk-stream', async (req, res) => {
     try {
         let { numbers, startDate, endDate } = req.body;
         if (!numbers || !Array.isArray(numbers) || numbers.length === 0) {
             return res.status(400).json({ error: 'Provide an array of numbers' });
         }
 
-        // Sanity cap to prevent out-of-memory (but user can change this)
-        const MAX_NUMBERS = 20000; // increase as needed
-        if (numbers.length > MAX_NUMBERS) {
-            return res.status(413).json({ error: `Too many numbers, max ${MAX_NUMBERS}` });
-        }
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
 
-        console.log(`[BULK] Processing ${numbers.length} numbers`);
+        console.log(`[STREAM] Processing ${numbers.length} numbers`);
 
-        // Concurrency: 50 parallel requests (adjust based on server capacity)
         const concurrency = 50;
-        const results = [];
         const batches = [];
         for (let i = 0; i < numbers.length; i += concurrency) {
             batches.push(numbers.slice(i, i + concurrency));
         }
 
+        let totalCount = 0;
+        const senderMap = {};
+        let processed = 0;
+
         for (const batch of batches) {
             const batchPromises = batch.map(num => fetchNumberData(num, startDate, endDate));
             const batchResults = await Promise.all(batchPromises);
-            results.push(...batchResults);
-        }
 
-        // Build sender breakdown
-        const senderMap = {};
-        let totalCount = 0;
-        for (const r of results) {
-            if (!r.error && r.data.length > 0) {
-                totalCount += r.data.length;
-                for (const rec of r.data) {
-                    const sender = rec.from || 'unknown';
-                    senderMap[sender] = (senderMap[sender] || 0) + 1;
+            for (const r of batchResults) {
+                if (!r.error && r.data.length > 0) {
+                    totalCount += r.data.length;
+                    for (const rec of r.data) {
+                        const sender = rec.from || 'unknown';
+                        senderMap[sender] = (senderMap[sender] || 0) + 1;
+                    }
                 }
             }
+
+            processed += batch.length;
+            const progress = Math.min(100, Math.round((processed / numbers.length) * 100));
+
+            const breakdown = Object.entries(senderMap)
+                .sort((a, b) => b[1] - a[1])
+                .map(([sender, count]) => ({ sender, count }));
+
+            const payload = JSON.stringify({ totalCount, breakdown, progress, done: false });
+            res.write(payload + '\n');
+            if (res.flush) res.flush();
         }
 
-        const breakdown = Object.entries(senderMap)
+        const finalBreakdown = Object.entries(senderMap)
             .sort((a, b) => b[1] - a[1])
             .map(([sender, count]) => ({ sender, count }));
+        const finalPayload = JSON.stringify({ totalCount, breakdown: finalBreakdown, progress: 100, done: true });
+        res.write(finalPayload + '\n');
+        res.end();
 
-        console.log(`[BULK DONE] ${numbers.length} numbers, ${totalCount} records (${Date.now() - startTime}ms)`);
-
-        res.json({
-            success: true,
-            totalCount,
-            breakdown
-        });
+        console.log(`[STREAM DONE] ${numbers.length} numbers, ${totalCount} records`);
     } catch (error) {
-        console.error(`[BULK ERROR] ${Date.now() - startTime}ms - ${error.message}`);
-        res.status(500).json({ 
-            success: false,
-            error: 'Failed to process bulk request',
-            details: error.message
-        });
+        console.error('[STREAM ERROR]', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        } else {
+            res.write(JSON.stringify({ error: error.message, done: true }) + '\n');
+            res.end();
+        }
     }
 });
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        timestamp: new Date().toISOString(),
-        cacheSize: cache.size
-    });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), cacheSize: cache.size });
 });
 
 app.get('/', (req, res) => {
@@ -228,7 +228,7 @@ app.get('/', (req, res) => {
         endpoints: {
             health: '/health',
             sms: '/api/sms?query=PHONE_NUMBER&page=1',
-            bulk: 'POST /api/sms/bulk (JSON body with { numbers: [], startDate, endDate })'
+            bulk: 'POST /api/sms/bulk-stream (JSON body with { numbers: [], startDate, endDate })'
         }
     });
 });
